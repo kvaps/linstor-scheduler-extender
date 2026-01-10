@@ -8,7 +8,6 @@ import (
 	"syscall"
 
 	"github.com/libopenstorage/stork/drivers/volume"
-	"github.com/libopenstorage/stork/pkg/extender"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 	apiv1 "k8s.io/api/core/v1"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/piraeusdatastore/linstor-scheduler-extender/pkg/consts"
 	_ "github.com/piraeusdatastore/linstor-scheduler-extender/pkg/driver"
+	"github.com/piraeusdatastore/linstor-scheduler-extender/pkg/extender"
 )
 
 var ext *extender.Extender

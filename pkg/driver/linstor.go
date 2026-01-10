@@ -134,6 +134,19 @@ func contains(a []string, e string) bool {
 	return false
 }
 
+// hasDRBDLayer checks if resource uses DRBD layer
+func hasDRBDLayer(layer lclient.ResourceLayer) bool {
+	if layer.Type == "DRBD" {
+		return true
+	}
+	for _, child := range layer.Children {
+		if hasDRBDLayer(child) {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *linstor) InspectVolume(volumeID string) (*storkvolume.Info, error) {
 	cli, err := l.linstorClient()
 	if err != nil {
@@ -152,21 +165,47 @@ func (l *linstor) InspectVolume(volumeID string) (*storkvolume.Info, error) {
 	}
 
 	var nodes []string
-	for _, r := range resources {
-		state := r.Volumes[0].State.DiskState
-		if state != "UpToDate" {
-			logrus.Debugf("Resource %s is not UpToDate on node %s, skipping (is %s)",
-				r.Name, r.NodeName, state)
-			continue
-		}
+	var drbdNodes []string
 
+	// Check if any resource uses DRBD
+	usesDRBD := false
+	for _, r := range resources {
+		if hasDRBDLayer(r.LayerObject) {
+			usesDRBD = true
+			break
+		}
+	}
+
+	for _, r := range resources {
 		if contains(r.Flags, lstor.FlagDiskless) {
 			// skip diskless deployments
 			logrus.Debugf("Resource %s is diskless on node %s, skipping",
 				r.Name, r.NodeName)
 			continue
 		}
-		nodes = append(nodes, r.NodeName)
+
+		state := r.Volumes[0].State.DiskState
+
+		if usesDRBD {
+			// For DRBD resources: only include UpToDate replicas
+			if state != "UpToDate" {
+				logrus.Debugf("Resource %s is not UpToDate on node %s, skipping (is %s)",
+					r.Name, r.NodeName, state)
+				continue
+			}
+			nodes = append(nodes, r.NodeName)
+			drbdNodes = append(drbdNodes, r.NodeName)
+		} else {
+			// For non-DRBD (local) resources: include any replica with disk state
+			if state == "" {
+				logrus.Debugf("Resource %s has no disk state on node %s, skipping",
+					r.Name, r.NodeName)
+				continue
+			}
+			logrus.Debugf("Resource %s is local (non-DRBD) on node %s with state %s",
+				r.Name, r.NodeName, state)
+			nodes = append(nodes, r.NodeName)
+		}
 	}
 
 	vd, err := cli.ResourceDefinitions.GetVolumeDefinition(context.TODO(), volumeID, 0)
@@ -174,11 +213,17 @@ func (l *linstor) InspectVolume(volumeID string) (*storkvolume.Info, error) {
 		return nil, fmt.Errorf("failed to get volume defintion: %w", err)
 	}
 
+	labels := make(map[string]string)
+	if usesDRBD && len(drbdNodes) > 0 {
+		labels["drbd"] = "true"
+	}
+
 	return &storkvolume.Info{
 		VolumeID:   rd.Name,
 		VolumeName: rd.Name,
 		DataNodes:  nodes,
 		Size:       vd.SizeKib / 1048576, // KiB to GiB
+		Labels:     labels,
 	}, nil
 }
 
